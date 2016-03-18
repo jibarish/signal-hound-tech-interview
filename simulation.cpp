@@ -19,28 +19,49 @@ mutex mtx;               // Mutex for queue concurrency
 
 int _tmain()
 {
+    // Usual remote keyless entry frequencies
+    const double NORTH_AMERICAN = 315.0e6;
+    const double EURO_ASIAN = 433.92e6;
+
     // Setup device...
 
-    id = 123; // value returned by saOpenDevice
-    len = 30; // value returned by saQueryStreamInfo
+    saStatus stat;
+
+    // Open device
+    stat = saOpenDevice(&id);
+    if(stat != saNoError) {
+        // Unable to open device, ensure the device
+        // is connected to the PC and try again
+    }
+
+    // Configure
+    saConfigCenterSpan(id, NORTH_AMERICAN, 0); // span ignored
+    saConfigLevel(id, -20.0);
+    saConfigIQ(id, 8, 50.0e3);
+
+    saInitiate(id, SA_IQ, 0);
+
+    // Get info
+    double bandwidth, sampleRate;
+    saQueryStreamInfo(id, &len, &bandwidth, &sampleRate);
 
     // Start polling thread
     HANDLE pollingThread;
     DWORD pollingThreadID;
 
     pollingThread = CreateThread(
-            NULL,                   // default security attributes
-            0,                      // use default stack size
-            PollingThreadFunction,  // thread function name
-            &container,             // argument to thread function
-            0,                      // use default creation flags
-            &pollingThreadID);      // returns the thread identifier
+            NULL,                   // Default security attributes
+            0,                      // Use default stack size
+            PollingThreadFunction,  // Thread function name
+            &container,             // Argument to thread function
+            0,                      // Use default creation flags
+            &pollingThreadID);      // Returns the thread identifier
 
-    // Get samples
-    int total = 0; // number of sample sets received
+    // Continuously retrieve sample sets from queue
+    int total = 0; // number of sample sets retrieved
     while (1) {
         if (!container.empty()) {
-            // Get next sample from queue
+            // Get next sample set from queue
             while (!mtx.try_lock())
                 Sleep(100);
 
@@ -48,7 +69,7 @@ int _tmain()
 
             mtx.unlock();
 
-            // Print
+            // Print (I, Q) pairs and stats
             for (int i=0; i<len*2; i=i+2) {
                 cout << "(" << t[i] << ", " << t[i+1] << ")" << endl;
             }
@@ -68,22 +89,20 @@ int _tmain()
 
     WaitForSingleObject(pollingThread, INFINITE);
 
+    saCloseDevice(id);
+
     return 0;
 }
 
 DWORD WINAPI PollingThreadFunction( LPVOID lpParam )
 {
-    // Simulate continuous polling
+    // Continuously poll device buffer
     while (1) {
-
+        // Allocate memory for sample set
         iq_array = new float[len * 2];
 
-        // Simulate getting one sample with saGetIQ_32f
-        // Fill iq_array with dummy data
-        for (int i=0; i<len*2; i=i+2) {
-            iq_array[i] = (i*i)%100000;      // arbitrary
-            iq_array[i+1] = (i*i*i)%1000000; // arbitrary
-        }
+        // Get sample set
+        saGetIQ_32f(id, iq_array);
 
         // Push
         while (!mtx.try_lock())
