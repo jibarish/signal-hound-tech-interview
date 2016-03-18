@@ -3,6 +3,7 @@
 #include <strsafe.h>
 #include <queue>
 #include <iostream>
+#include <mutex>
 
 using namespace std;
 
@@ -11,9 +12,10 @@ DWORD WINAPI PollingThreadFunction( LPVOID lpParam );
 
 int id;                  // Device ID
 int len;                 // Number of I/Q pairs returned by buffer
-float *iq_array;         // Array to store returns of saGetIQ_32f
+float *iq_array;         // Array to store a sample set from saGetIQ_32f
 queue<float*> container; // Queue of pointers to iq_arrays
                          // PollingThread pushes, main thread pops
+mutex mtx;               // Mutex for queue concurrency
 
 int _tmain()
 {
@@ -34,33 +36,63 @@ int _tmain()
             0,                      // use default creation flags
             &pollingThreadID);      // returns the thread identifier
 
-    WaitForSingleObject(pollingThread, INFINITE);
+    // Get samples
+    int total = 0; // number of sample sets received
+    while (1) {
+        if (!container.empty()) {
+            // Get next sample from queue
+            while (!mtx.try_lock())
+                Sleep(100);
 
-    // Get next sample set from polling thread
-    float *t = container.front();
-    // Print
-    for (int i=0; i<len*2; i=i+2) {
-        cout << "(" << t[i] << ", " << t[i+1] << ")" << endl;
+            float *t = container.front();
+
+            mtx.unlock();
+
+            // Print
+            for (int i=0; i<len*2; i=i+2) {
+                cout << "(" << t[i] << ", " << t[i+1] << ")" << endl;
+            }
+            cout << ++total << " sample sets written" << endl;
+
+            // Pop and destroy
+            while (!mtx.try_lock())
+                Sleep(100);
+
+            container.pop();
+
+            mtx.unlock();
+
+            delete t;
+        }
     }
-    // Destroy
-    container.pop();
-    delete [] t;
+
+    WaitForSingleObject(pollingThread, INFINITE);
 
     return 0;
 }
 
 DWORD WINAPI PollingThreadFunction( LPVOID lpParam )
 {
-    iq_array = new float[len * 2];
+    // Simulate continuous polling
+    while (1) {
 
-    // Simulate saGetIQ_32f
-    // Fill iq_array
-    for (int i=0; i<len*2; i=i+2) {
-        iq_array[i] = i*6.5; // arbitrary
-        iq_array[i+1] = i*13.5; // arbitrary
+        iq_array = new float[len * 2];
+
+        // Simulate getting one sample with saGetIQ_32f
+        // Fill iq_array with dummy data
+        for (int i=0; i<len*2; i=i+2) {
+            iq_array[i] = (i*i)%100000;      // arbitrary
+            iq_array[i+1] = (i*i*i)%1000000; // arbitrary
+        }
+
+        // Push
+        while (!mtx.try_lock())
+            Sleep(100);
+
+        container.push(iq_array);
+
+        mtx.unlock();
     }
-
-    container.push(iq_array);
 
     return 0;
 }
